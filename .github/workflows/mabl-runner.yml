@@ -23,11 +23,11 @@ jobs:
           # This prevents the 'fromJSON' error in the next job.
           if [ -z "$CSV_DATA" ]; then
             echo "Warning: CSV file is empty or only contains a header. Skipping matrix creation."
-            MATRIX_JSON="[]"
+            MATRIX_JSON="{\"include\":[]}"
           else
             # Process each line to create a valid JSON object, trimming any whitespace.
             # jq is pre-installed on ubuntu-latest runners.
-            MATRIX_JSON=$(echo "$CSV_DATA" | awk -F',' '{print "{\"test_id\":\""$1"\", \"environment_id\":\""$2"\"}"}' | jq -s .)
+            MATRIX_JSON=$(echo "$CSV_DATA" | awk -F',' '{print "{\"test_id\":\""$1"\", \"environment_id\":\""$2"\"}"}' | jq -s . | sed 's/^/{"include":/g' | sed 's/$/}/g')
           fi
           
           # Set the output for the next job to consume using a multi-line format.
