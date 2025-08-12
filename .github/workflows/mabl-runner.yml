@@ -41,6 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: get-mabl-data
     strategy:
+      fail-fast: false  # This ensures all jobs in the matrix run regardless of a single job's failure.
       matrix: ${{ fromJSON(needs.get-mabl-data.outputs.matrix) }}
     steps:
       - name: Checkout Code
