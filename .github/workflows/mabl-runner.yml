@@ -15,14 +15,20 @@ jobs:
       - name: Read Mabl Data from CSV
         id: get_data
         run: |
-          # The file 'mabl_data.csv' should have 'test_id' and 'environment_id' columns.
-          # We use a combination of tail, awk, and jq to parse the CSV into a JSON array.
-          CSV_DATA=$(tail -n +2 mabl_test_ids.csv)
+          # Read the CSV file, skipping the header line and removing any carriage return characters.
+          # The 'tr -d "\r"' command is crucial for handling files created on different operating systems.
+          CSV_DATA=$(tail -n +2 mabl_test_ids.csv | tr -d '\r')
           
-          # Process each line to create a valid JSON object, trimming any whitespace.
-          # Note: jq must be installed on the runner for this to work. It's pre-installed
-          # on ubuntu-latest runners.
-          MATRIX_JSON=$(echo "$CSV_DATA" | awk -F',' '{print "{\"test_id\":\""$1"\", \"environment_id\":\""$2"\"}"}' | jq -s . | tr -d '\n')
+          # Check if the CSV data is empty. If so, create an empty JSON array.
+          # This prevents the 'fromJSON' error in the next job.
+          if [ -z "$CSV_DATA" ]; then
+            echo "Warning: CSV file is empty or only contains a header. Skipping matrix creation."
+            MATRIX_JSON="[]"
+          else
+            # Process each line to create a valid JSON object, trimming any whitespace.
+            # jq is pre-installed on ubuntu-latest runners.
+            MATRIX_JSON=$(echo "$CSV_DATA" | awk -F',' '{print "{\"test_id\":\""$1"\", \"environment_id\":\""$2"\"}"}' | jq -s .)
+          fi
           
           # Set the output for the next job to consume
           echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
