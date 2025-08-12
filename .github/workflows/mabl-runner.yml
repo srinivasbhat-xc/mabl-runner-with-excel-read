@@ -12,13 +12,16 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Read Test IDs from CSV
-        id: get_ids
-        run: |
-          # Read the CSV file, skipping the header line if it exists.
-          # We'll use 'awk' to process each line and 'jq' to format it as a JSON array.
-          TEST_IDS=$(awk 'NR > 1' mabl_test_ids.csv | jq -R . | jq -s . | tr -d '\n')
-          echo "test_ids=$TEST_IDS" >> $GITHUB_OUTPUT
+      - name: Read Mabl Data from CSV
+  id: get_data
+  run: |
+    # Read the CSV file, skipping the header.
+    CSV_DATA=$(tail -n +2 mabl_data.csv)
+    
+    # Process each line to create a valid JSON object, trimming any whitespace.
+    MATRIX_JSON=$(echo "$CSV_DATA" | awk -F',' '{print "{\"test_id\":\""$1"\", \"environment_id\":\""$2"\"}"}' | jq -s . | tr -d '\n')
+    
+    echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
 
   mabl-local:
     runs-on: ubuntu-latest
