@@ -17,7 +17,7 @@ jobs:
         run: |
           # The file 'mabl_data.csv' should have 'test_id' and 'environment_id' columns.
           # We use a combination of tail, awk, and jq to parse the CSV into a JSON array.
-          CSV_DATA=$(tail -n +2 mabl_data.csv)
+          CSV_DATA=$(tail -n +2 mabl_test_ids.csv)
           
           # Process each line to create a valid JSON object, trimming any whitespace.
           # Note: jq must be installed on the runner for this to work. It's pre-installed
