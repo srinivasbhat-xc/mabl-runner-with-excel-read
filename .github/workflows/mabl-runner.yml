@@ -1,0 +1,37 @@
+name: Run Mabl Tests Locally
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  mabl-local:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test_id: [WjmN18qPOlkt0TaVMrJhHA-j, lsXG9r7rI38RbdpmsUCldA-j]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Mabl CLI
+        run: npm install -g @mablhq/mabl-cli
+
+      - name: Run Test Locally
+        run: |
+          # Install a virtual screen to allow headed browser execution
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          
+          echo "Running Test ID: ${{ matrix.test_id }}"
+          mabl auth activate-key ${{ secrets.MABL_API_KEY }}
+          
+          # Use xvfb-run to launch the test in headed mode
+          xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id RH4FfeHgfnxiHFJyKkPsmQ-e
