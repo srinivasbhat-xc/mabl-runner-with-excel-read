@@ -1,4 +1,4 @@
-name: Run Mabl Tests with Reporting
+name: Run Mabl Tests with Consolidated PDF Report
 
 on:
   workflow_dispatch:
@@ -54,20 +54,19 @@ jobs:
           sudo apt-get install -y xvfb
           
           echo "Running Test ID: ${{ matrix.test_id }} with Environment ID: ${{ matrix.environment_id }}"
-          mabl auth activate-key ${{ secrets.MABL_API_KEY }}
-          
-          xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ matrix.environment_id }}
+          # The Mabl CLI output is redirected to a log file
+          xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ matrix.environment_id }} > mabl_test_log.txt 2>&1
         if: always()
 
       - name: Upload Mabl Test Logs
         uses: actions/upload-artifact@v4
         with:
           name: mabl-test-logs-${{ matrix.test_id }}
-          path: /path/to/mabl/logs/
+          path: mabl_test_log.txt
           retention-days: 7
         if: always()
 
-  report-summary:
+  consolidate-report:
     runs-on: ubuntu-latest
     needs: run-mabl-test
     if: always()
@@ -77,22 +76,53 @@ jobs:
         with:
           path: mabl_artifacts
       
-      - name: Generate Summary Report
-        id: generate_summary
+      - name: Generate Consolidated PDF Report
         run: |
-          # Generate a markdown file that can be converted to PDF.
           REPORT_FILE="mabl_test_report.md"
+          echo "# Mabl Test Report" > "$REPORT_FILE"
           
-          echo "## Mabl Test Summary" > "$REPORT_FILE"
-          echo "| Test ID | Status | Logs |" >> "$REPORT_FILE"
-          echo "|---|---|---|" >> "$REPORT_FILE"
+          PASSED_COUNT=0
+          FAILED_COUNT=0
+          TOTAL_COUNT=0
           
-          # This script will now generate a report that includes links to the logs.
-          for test_job in $(jq -r '.include[] | @base64' <<< "${{ toJSON(fromJSON(needs.get-mabl-data.outputs.matrix).include) }}")
-          do
-            test_id=$(echo "${test_job}" | base64 --decode | jq -r '.test_id')
-            echo "| $test_id | ✅ Success | [Logs artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts-tab) |" >> "$REPORT_FILE"
+          # Iterate over the downloaded artifacts to build the report summary.
+          for artifact_dir in mabl_artifacts/mabl-test-logs-*; do
+            if [ -d "$artifact_dir" ]; then
+              TOTAL_COUNT=$((TOTAL_COUNT + 1))
+              TEST_ID=$(basename "$artifact_dir" | sed 's/mabl-test-logs-//')
+              LOG_FILE="$artifact_dir/mabl_test_log.txt"
+              
+              # Check for success/failure string in the log file.
+              if grep -q "Test Passed" "$LOG_FILE"; then
+                STATUS="✅ Passed"
+                PASSED_COUNT=$((PASSED_COUNT + 1))
+              else
+                STATUS="❌ Failed"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+              fi
+              
+              echo "## Test ID: $TEST_ID" >> "$REPORT_FILE"
+              echo "### Status: $STATUS" >> "$REPORT_FILE"
+              echo "### Logs" >> "$REPORT_FILE"
+              echo '```' >> "$REPORT_FILE"
+              cat "$LOG_FILE" >> "$REPORT_FILE"
+              echo '```' >> "$REPORT_FILE"
+              echo "" >> "$REPORT_FILE"
+            fi
           done
+          
+          # Add the summary section to the top of the report.
+          SUMMARY_CONTENT="
+          ## Summary
+          - **Total Tests:** $TOTAL_COUNT
+          - **Passed:** $PASSED_COUNT
+          - **Failed:** $FAILED_COUNT
+          \n
+          ---
+          \n
+          "
+          # Insert the summary at the beginning of the markdown file.
+          echo -e "$SUMMARY_CONTENT" | cat - "$REPORT_FILE" > temp && mv temp "$REPORT_FILE"
 
       - name: Generate PDF from Markdown
         uses: pandoc/action-pandoc@v3
