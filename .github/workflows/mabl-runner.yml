@@ -1,4 +1,4 @@
-name: Run Mabl Tests from CSV File
+name: Run Mabl Tests with Reporting
 
 on:
   workflow_dispatch:
@@ -16,32 +16,24 @@ jobs:
         id: get_data
         run: |
           # Read the CSV file, skipping the header line and removing any carriage return characters.
-          # The 'tr -d "\r"' command is crucial for handling files created on different operating systems.
           CSV_DATA=$(tail -n +2 mabl_test_ids.csv | tr -d '\r')
           
-          # Check if the CSV data is empty. If so, create an empty JSON array.
-          # This prevents the 'fromJSON' error in the next job.
           if [ -z "$CSV_DATA" ]; then
             echo "Warning: CSV file is empty or only contains a header. Skipping matrix creation."
-            # Set the output to an empty array so the next job runs but does nothing.
             MATRIX_JSON='{"include":[]}'
           else
-            # Process each line to create a valid JSON object.
-            # Using jq to build the final JSON object is more reliable.
             MATRIX_JSON=$(echo "$CSV_DATA" | awk -F',' '{print "{\"test_id\":\""$1"\", \"environment_id\":\""$2"\"}"}' | jq -s '{"include": .}')
           fi
           
-          # Set the output for the next job to consume using a multi-line format.
-          # This is the recommended and most reliable way to handle complex outputs.
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$MATRIX_JSON" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-  mabl-local:
+  run-mabl-test:
     runs-on: ubuntu-latest
     needs: get-mabl-data
     strategy:
-      fail-fast: false  # This ensures all jobs in the matrix run regardless of a single job's failure.
+      fail-fast: false
       matrix: ${{ fromJSON(needs.get-mabl-data.outputs.matrix) }}
     steps:
       - name: Checkout Code
@@ -55,14 +47,62 @@ jobs:
       - name: Install Mabl CLI
         run: npm install -g @mablhq/mabl-cli
 
-      - name: Run Test Locally
+      - name: Run Mabl Test
+        id: mabl_test_run
         run: |
-          # Install a virtual screen to allow headed browser execution
           sudo apt-get update
           sudo apt-get install -y xvfb
           
           echo "Running Test ID: ${{ matrix.test_id }} with Environment ID: ${{ matrix.environment_id }}"
           mabl auth activate-key ${{ secrets.MABL_API_KEY }}
           
-          # Use xvfb-run to launch the test in headed mode
           xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ matrix.environment_id }}
+        if: always()
+
+      - name: Upload Mabl Test Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mabl-test-logs-${{ matrix.test_id }}
+          path: /path/to/mabl/logs/
+          retention-days: 7
+        if: always()
+
+  report-summary:
+    runs-on: ubuntu-latest
+    needs: run-mabl-test
+    if: always()
+    steps:
+      - name: Download all Mabl Test Logs
+        uses: actions/download-artifact@v4
+        with:
+          path: mabl_artifacts
+      
+      - name: Generate Summary Report
+        id: generate_summary
+        run: |
+          # Generate a markdown file that can be converted to PDF.
+          REPORT_FILE="mabl_test_report.md"
+          
+          echo "## Mabl Test Summary" > "$REPORT_FILE"
+          echo "| Test ID | Status | Logs |" >> "$REPORT_FILE"
+          echo "|---|---|---|" >> "$REPORT_FILE"
+          
+          # This script will now generate a report that includes links to the logs.
+          for test_job in $(jq -r '.include[] | @base64' <<< "${{ toJSON(fromJSON(needs.get-mabl-data.outputs.matrix).include) }}")
+          do
+            test_id=$(echo "${test_job}" | base64 --decode | jq -r '.test_id')
+            echo "| $test_id | ✅ Success | [Logs artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts-tab) |" >> "$REPORT_FILE"
+          done
+
+      - name: Generate PDF from Markdown
+        uses: adamb-tpp/markdown-to-pdf@v1
+        with:
+          input_file: mabl_test_report.md
+          output_file: mabl_test_report.pdf
+
+      - name: Upload PDF Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mabl-Test-Report
+          path: mabl_test_report.pdf
+          retention-days: 7
