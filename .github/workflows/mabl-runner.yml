@@ -57,7 +57,6 @@ jobs:
           # The Mabl CLI output is redirected to a log file
           xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ matrix.environment_id }} > mabl_test_log.txt 2>&1
         if: always()
-
       - name: Upload Mabl Test Logs
         uses: actions/upload-artifact@v4
         with:
@@ -92,13 +91,15 @@ jobs:
               TEST_ID=$(basename "$artifact_dir" | sed 's/mabl-test-logs-//')
               LOG_FILE="$artifact_dir/mabl_test_log.txt"
               
-              # Check for success/failure string in the log file.
+              # Check for success/failure strings in the log file.
               if grep -q "Test Passed" "$LOG_FILE"; then
                 STATUS="✅ Passed"
                 PASSED_COUNT=$((PASSED_COUNT + 1))
-              else
+              elif grep -q "Test Failed" "$LOG_FILE"; then
                 STATUS="❌ Failed"
                 FAILED_COUNT=$((FAILED_COUNT + 1))
+              else
+                STATUS="⚠️ Inconclusive"
               fi
               
               echo "## Test ID: $TEST_ID" >> "$REPORT_FILE"
