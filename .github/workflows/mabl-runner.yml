@@ -78,8 +78,11 @@ jobs:
       
       - name: Generate Consolidated PDF Report
         run: |
-          REPORT_FILE="mabl_test_report.md"
-          echo "# Mabl Test Report" > "$REPORT_FILE"
+          # Install wkhtmltopdf for HTML to PDF conversion
+          sudo apt-get update && sudo apt-get install -y wkhtmltopdf
+          
+          REPORT_FILE="mabl_test_report.html"
+          echo "<html><head><title>Mabl Test Report</title><style>body { font-family: sans-serif; }</style></head><body>" > "$REPORT_FILE"
           
           PASSED_COUNT=0
           FAILED_COUNT=0
@@ -103,33 +106,33 @@ jobs:
                 STATUS="⚠️ Inconclusive"
               fi
               
-              echo "## Test ID: $TEST_ID" >> "$REPORT_FILE"
-              echo "### Status: $STATUS" >> "$REPORT_FILE"
-              echo "### Logs" >> "$REPORT_FILE"
-              echo '```' >> "$REPORT_FILE"
+              echo "<h2>Test ID: $TEST_ID</h2>" >> "$REPORT_FILE"
+              echo "<h3>Status: $STATUS</h3>" >> "$REPORT_FILE"
+              echo "<h3>Logs</h3>" >> "$REPORT_FILE"
+              echo "<pre>" >> "$REPORT_FILE"
               cat "$LOG_FILE" >> "$REPORT_FILE"
-              echo '```' >> "$REPORT_FILE"
-              echo "" >> "$REPORT_FILE"
+              echo "</pre>" >> "$REPORT_FILE"
+              echo "<hr>" >> "$REPORT_FILE"
             fi
           done
           
           # Add the summary section to the top of the report.
           SUMMARY_CONTENT="
-          ## Summary
-          - **Total Tests:** $TOTAL_COUNT
-          - **Passed:** $PASSED_COUNT
-          - **Failed:** $FAILED_COUNT
-          \n
-          ---
-          \n
+          <h1>Mabl Test Report</h1>
+          <h2>Summary</h2>
+          <ul>
+            <li><strong>Total Tests:</strong> $TOTAL_COUNT</li>
+            <li><strong>Passed:</strong> $PASSED_COUNT ✅</li>
+            <li><strong>Failed:</strong> $FAILED_COUNT ❌</li>
+          </ul>
+          <hr>
           "
-          # Insert the summary at the beginning of the markdown file.
-          echo -e "$SUMMARY_CONTENT" | cat - "$REPORT_FILE" > temp && mv temp "$REPORT_FILE"
-
-      - name: Generate PDF from Markdown
-        uses: pandoc/action-pandoc@v3
-        with:
-          args: mabl_test_report.md -o mabl_test_report.pdf
+          # Insert the summary at the beginning of the HTML file.
+          sed -i "1s/^/$SUMMARY_CONTENT/" "$REPORT_FILE"
+          echo "</body></html>" >> "$REPORT_FILE"
+          
+          # Use wkhtmltopdf to convert the HTML file to a PDF.
+          wkhtmltopdf "$REPORT_FILE" mabl_test_report.pdf
 
       - name: Upload PDF Report
         uses: actions/upload-artifact@v4
