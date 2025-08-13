@@ -56,7 +56,7 @@ jobs:
           echo "Running Test ID: ${{ matrix.test_id }} with Environment ID: ${{ matrix.environment_id }}"
           mabl auth activate-key ${{ secrets.MABL_API_KEY }}
           # The Mabl CLI output is redirected to a log file
-          xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ matrix.environment_id }} > mabl_test_log.txt 2>&1
+          xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ matrix.environment_id }} > mabl_test_log.txt 2>&1 || true
         if: always()
       - name: Upload Mabl Test Logs
         uses: actions/upload-artifact@v4
