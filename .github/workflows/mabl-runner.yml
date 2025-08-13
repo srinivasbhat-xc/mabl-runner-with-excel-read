@@ -1,1 +1,160 @@
+name: Run Mabl Tests with Consolidated PDF Report
+
+on:
+  workflow_dispatch:
+
+jobs:
+  get-mabl-data:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.get_data.outputs.matrix }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Read Mabl Data from CSV
+        id: get_data
+        run: |
+          # Read the CSV file, skipping the header line and removing any carriage return characters.
+          CSV_DATA=$(tail -n +2 mabl_test_ids.csv | tr -d '\r')
+          
+          if [ -z "$CSV_DATA" ]; then
+            echo "Warning: CSV file is empty or only contains a header. Skipping matrix creation."
+            MATRIX_JSON='{"include":[]}'
+          else
+            MATRIX_JSON=$(echo "$CSV_DATA" | awk -F',' '{print "{\"test_id\":\""$1"\", \"environment_id\":\""$2"\"}"}' | jq -s '{"include": .}')
+          fi
+          
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$MATRIX_JSON" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  run-mabl-test:
+    runs-on: ubuntu-latest
+    needs: get-mabl-data
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.get-mabl-data.outputs.matrix) }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Mabl CLI
+        run: npm install -g @mablhq/mabl-cli
+
+      - name: Run Mabl Test
+        id: mabl_test_run
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          
+          echo "Running Test ID: ${{ matrix.test_id }} with Environment ID: ${{ matrix.environment_id }}"
+          mabl auth activate-key ${{ secrets.MABL_API_KEY }}
+          # The Mabl CLI output is redirected to a log file
+          xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ matrix.environment_id }} > mabl_test_log.txt 2>&1 || true
+        if: always()
+      - name: Upload Mabl Test Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mabl-test-logs-${{ matrix.test_id }}
+          path: mabl_test_log.txt
+          retention-days: 7
+        if: always()
+
+  consolidate-report:
+    runs-on: ubuntu-latest
+    needs: run-mabl-test
+    if: always()
+    steps:
+      - name: Download all Mabl Test Logs
+        uses: actions/download-artifact@v4
+        with:
+          path: mabl_artifacts
+      
       - name: Generate Consolidated PDF Report
+        id: generate_report
+        env:
+          # Set locale for correct UTF-8 character encoding
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+        run: |
+          # Get the current UTC date and time in a specific format for the filename.
+          TIMESTAMP=$(date -u +'%Y-%m-%d-%H-%M-%S')
+          PDF_FILENAME="mabl_test_report_$TIMESTAMP.pdf"
+          
+          # Install wkhtmltopdf for HTML to PDF conversion
+          sudo apt-get update && sudo apt-get install -y wkhtmltopdf
+          
+          REPORT_FILE="mabl_test_report.html"
+          
+          PASSED_COUNT=0
+          FAILED_COUNT=0
+          TOTAL_COUNT=0
+          
+          DETAILED_REPORT=""
+          
+          # Iterate over the downloaded artifacts to build the detailed report section.
+          for artifact_dir in mabl_artifacts/mabl-test-logs-*; do
+            if [ -d "$artifact_dir" ]; then
+              TOTAL_COUNT=$((TOTAL_COUNT + 1))
+              TEST_ID=$(basename "$artifact_dir" | sed 's/mabl-test-logs-//')
+              LOG_FILE="$artifact_dir/mabl_test_log.txt"
+              
+              # Check for success/failure strings in the log file.
+              if grep -q "Test Passed" "$LOG_FILE"; then
+                STATUS="Passed"
+                PASSED_COUNT=$((PASSED_COUNT + 1))
+              elif grep -q "Test Failed" "$LOG_FILE"; then
+                STATUS="Failed"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+              else
+                STATUS="⚠️ Inconclusive"
+              fi
+              
+              DETAILED_REPORT+="<h2>Test ID: $TEST_ID</h2>"
+              DETAILED_REPORT+="<h3>Status: $STATUS</h3>"
+              DETAILED_REPORT+="<h3>Logs</h3>"
+              DETAILED_REPORT+="<pre>"
+              DETAILED_REPORT+=$(cat "$LOG_FILE")
+              DETAILED_REPORT+="</pre>"
+              DETAILED_REPORT+="<hr>"
+            fi
+          done
+          
+          # Create the final HTML report file.
+          echo "<html><head><title>Mabl Test Report</title><style>body { font-family: sans-serif; }</style></head><body>" > "$REPORT_FILE"
+          
+          # Add the summary section to the top of the report.
+          SUMMARY_CONTENT="
+          <h1>Mabl Test Report</h1>
+          <h2>Summary</h2>
+          <ul>
+            <li><strong>Total Tests:</strong> $TOTAL_COUNT</li>
+            <li style=\"background-color: #28a745; color: white; padding: 5px; display: inline-block; border-radius: 5px;\"><strong>Passed:</strong> $PASSED_COUNT</li>
+            <li style=\"background-color: #dc3545; color: white; padding: 5px; display: inline-block; border-radius: 5px;\"><strong>Failed:</strong> $FAILED_COUNT</li>
+          </ul>
+          <hr>
+          "
+          echo "$SUMMARY_CONTENT" >> "$REPORT_FILE"
+          
+          # Append the detailed report.
+          echo "$DETAILED_REPORT" >> "$REPORT_FILE"
+          echo "</body></html>" >> "$REPORT_FILE"
+          
+          # Use wkhtmltopdf to convert the HTML file to a PDF with the dynamic filename.
+          wkhtmltopdf "$REPORT_FILE" "$PDF_FILENAME"
+          
+          # Make the dynamic filename available to the next step.
+          echo "pdf_filename=$PDF_FILENAME" >> $GITHUB_OUTPUT
+
+      - name: Upload PDF Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mabl-Test-Report-${{ steps.generate_report.outputs.pdf_filename }}
+          path: ${{ steps.generate_report.outputs.pdf_filename }}
+          retention-days: 7
