@@ -1,48 +1,88 @@
+# This workflow runs Mabl tests based on IDs from a CSV file.
+# It allows the user to select a target environment from a dropdown when running the workflow manually.
+
 name: Run Mabl Tests from CSV File
 
 on:
+  # This makes the workflow runnable manually from the Actions tab in GitHub.
   workflow_dispatch:
+    inputs:
+      # Dropdown input for environment selection.
+      # The options here should match the keys in 'environment_mapping.json'.
+      environment:
+        type: choice
+        description: 'Select the environment to run tests on'
+        required: true
+        options:
+          - QAINTX
+          - Staging
+        default: 'Staging'
 
 jobs:
-  get-mabl-data:
+  # This job prepares the data for the test execution job.
+  # It reads the test IDs from the CSV and finds the correct environment ID from the mapping file.
+  prepare-test-run:
     runs-on: ubuntu-latest
     outputs:
+      # Output 1: A JSON matrix of test IDs for parallel execution.
       matrix: ${{ steps.get_data.outputs.matrix }}
+      # Output 2: The specific Mabl environment ID for this run.
+      environment_id: ${{ steps.get_env.outputs.environment_id }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Read Mabl Data from CSV
+      - name: Get Environment ID
+        id: get_env
+        run: |
+          # The selected friendly name (e.g., "Staging") from the workflow trigger.
+          ENV_NAME="${{ github.event.inputs.environment }}"
+          echo "Selected environment: $ENV_NAME"
+          
+          # Use jq to parse the mapping file and find the ID corresponding to the selected name.
+          # This is a robust way to handle JSON parsing in shell scripts.
+          ENV_ID=$(jq -r ".[\"$ENV_NAME\"]" environment_mapping.json)
+          
+          if [ -z "$ENV_ID" ] || [ "$ENV_ID" == "null" ]; then
+            echo "Error: Could not find environment ID for '$ENV_NAME' in environment_mapping.json"
+            exit 1
+          fi
+
+          echo "Found Environment ID: $ENV_ID"
+          echo "environment_id=$ENV_ID" >> $GITHUB_OUTPUT
+
+      - name: Create Test Matrix from CSV
         id: get_data
         run: |
           # Read the CSV file, skipping the header line and removing any carriage return characters.
-          # The 'tr -d "\r"' command is crucial for handling files created on different operating systems.
-          CSV_DATA=$(tail -n +2 mabl_test_ids.csv | tr -d '\r')
+          # We only need the first column now, which contains the test ID.
+          CSV_DATA=$(tail -n +2 mabl_test_ids.csv | cut -d, -f1 | tr -d '\r')
           
-          # Check if the CSV data is empty. If so, create an empty JSON array.
-          # This prevents the 'fromJSON' error in the next job.
+          # Check if the CSV data is empty. If so, create an empty JSON array to prevent errors.
           if [ -z "$CSV_DATA" ]; then
-            echo "Warning: CSV file is empty or only contains a header. Skipping matrix creation."
-            # Set the output to an empty array so the next job runs but does nothing.
+            echo "Warning: CSV file is empty or only contains a header. No tests will run."
             MATRIX_JSON='{"include":[]}'
           else
-            # Process each line to create a valid JSON object.
-            # Using jq to build the final JSON object is more reliable.
-            MATRIX_JSON=$(echo "$CSV_DATA" | awk -F',' '{print "{\"test_id\":\""$1"\", \"environment_id\":\""$2"\"}"}' | jq -s '{"include": .}')
+            # Process each line to create a valid JSON object containing just the test_id.
+            # Using jq to build the final JSON object is reliable and clean.
+            MATRIX_JSON=$(echo "$CSV_DATA" | awk '{print "{\"test_id\":\""$1"\"}"}' | jq -s '{"include": .}')
           fi
           
           # Set the output for the next job to consume using a multi-line format.
-          # This is the recommended and most reliable way to handle complex outputs.
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$MATRIX_JSON" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+  # This job executes the Mabl tests in parallel using the matrix strategy.
   mabl-local:
     runs-on: ubuntu-latest
-    needs: get-mabl-data
+    # This job depends on the successful completion of the 'prepare-test-run' job.
+    needs: prepare-test-run
+    # Continue running other tests in the matrix even if one fails.
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.get-mabl-data.outputs.matrix) }}
+      # The matrix is dynamically generated from the CSV file in the previous job.
+      matrix: ${{ fromJSON(needs.prepare-test-run.outputs.matrix) }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -56,13 +96,17 @@ jobs:
         run: npm install -g @mablhq/mabl-cli
 
       - name: Run Test Locally
+        env:
+          # Securely pass the Mabl API key to the job.
+          MABL_API_KEY: ${{ secrets.MABL_API_KEY }}
         run: |
-          # Install a virtual screen to allow headed browser execution
+          # Install a virtual screen to allow headed browser execution in a headless environment.
           sudo apt-get update
           sudo apt-get install -y xvfb
           
-          echo "Running Test ID: ${{ matrix.test_id }} with Environment ID: ${{ matrix.environment_id }}"
-          mabl auth activate-key ${{ secrets.MABL_API_KEY }}
+          echo "Running Test ID: ${{ matrix.test_id }} on Environment ID: ${{ needs.prepare-test-run.outputs.environment_id }}"
+          mabl auth activate-key $MABL_API_KEY
           
-          # Use xvfb-run to launch the test in headed mode
-          xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ matrix.environment_id }}
+          # Use xvfb-run to launch the test in a virtual display (headed mode).
+          # The test ID comes from the matrix, and the environment ID comes from the 'needs' context.
+          xvfb-run mabl tests run --id ${{ matrix.test_id }} --environment-id ${{ needs.prepare-test-run.outputs.environment_id }}
